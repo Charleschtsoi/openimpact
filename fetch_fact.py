@@ -452,27 +452,36 @@ def main():
         return 0
     
     # Fetch and display fact
-    print("Fetching a random useless fact...")
-    print("-" * 50)
+    quiet = args.quiet  # Support --quiet in one-shot mode too
+    
+    if not quiet:
+        print("Fetching a random useless fact...")
+        print("-" * 50)
     
     fact = fetch_random_fact()
     
     if fact:
-        print(fact)
-        print("-" * 50)
+        if not quiet:
+            print(fact)
+            print("-" * 50)
         
         # Save to archive if requested
         if args.save:
-            print("\nChecking archive for duplicates...")
+            if not quiet:
+                print("\nChecking archive for duplicates...")
             if add_fact_to_archive(fact, archive_file, api_url):
                 count = get_fact_count(archive_file)
-                print(f"Fact saved to archive! Total facts: {count}")
+                if not quiet:
+                    print(f"Fact saved to archive! Total facts: {count}")
             else:
                 count = get_fact_count(archive_file)
-                print(f"Archive already contains {count} fact(s).")
+                if not quiet:
+                    print(f"Archive already contains {count} fact(s).")
         
         return 0
     else:
+        if not quiet:
+            print("Failed to fetch fact.", file=sys.stderr)
         return 1
 
 
