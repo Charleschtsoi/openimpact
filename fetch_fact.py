@@ -10,6 +10,7 @@ import sys
 import json
 import os
 import argparse
+import time
 from datetime import datetime
 
 
@@ -205,6 +206,163 @@ def show_archive(archive_file):
         print("-" * 70)
 
 
+def run_automated_collection(archive_file, interval, max_facts=None, quiet=False, stats_interval=10):
+    """
+    Run automated fact collection in a loop.
+    
+    Args:
+        archive_file (str): Path to archive file
+        interval (int): Seconds between fetches
+        max_facts (int, optional): Maximum facts to collect (None for unlimited)
+        quiet (bool): Reduce output verbosity
+        stats_interval (int): Show stats every N fetches
+        
+    Returns:
+        int: Exit code (0 for success)
+    """
+    api_url = "https://uselessfacts.jsph.pl/api/v2/facts/random"
+    
+    # Statistics tracking
+    stats = {
+        'attempts': 0,
+        'successful_fetches': 0,
+        'duplicates': 0,
+        'unique_added': 0,
+        'errors': 0,
+        'start_time': datetime.now()
+    }
+    
+    # Get initial archive count
+    initial_count = get_fact_count(archive_file)
+    
+    if not quiet:
+        print("=" * 70)
+        print("Automated Fact Collection Started")
+        print("=" * 70)
+        print(f"Archive file: {archive_file}")
+        print(f"Initial facts in archive: {initial_count}")
+        print(f"Fetch interval: {interval} seconds")
+        if max_facts:
+            print(f"Maximum facts to collect: {max_facts}")
+        print(f"Stats will be shown every {stats_interval} fetches")
+        print("Press Ctrl+C to stop gracefully")
+        print("=" * 70)
+        print()
+    
+    try:
+        while True:
+            # Check if we've reached max facts
+            if max_facts is not None:
+                current_count = get_fact_count(archive_file)
+                facts_collected = current_count - initial_count
+                if facts_collected >= max_facts:
+                    if not quiet:
+                        print(f"\nReached maximum facts limit ({max_facts}). Stopping collection.")
+                    break
+            
+            stats['attempts'] += 1
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            if not quiet:
+                print(f"[{current_time}] Attempt #{stats['attempts']}: Fetching fact...")
+            
+            # Fetch fact from API
+            fact = fetch_random_fact()
+            
+            if fact:
+                stats['successful_fetches'] += 1
+                
+                if not quiet:
+                    print(f"  ✓ Fetched: {fact[:80]}{'...' if len(fact) > 80 else ''}")
+                
+                # Try to add to archive
+                if add_fact_to_archive(fact, archive_file, api_url):
+                    stats['unique_added'] += 1
+                    current_count = get_fact_count(archive_file)
+                    if not quiet:
+                        print(f"  ✓ Added to archive! Total facts: {current_count}")
+                else:
+                    stats['duplicates'] += 1
+                    if not quiet:
+                        print(f"  ⊗ Duplicate detected, skipped")
+            else:
+                stats['errors'] += 1
+                if not quiet:
+                    print(f"  ✗ Failed to fetch fact")
+            
+            # Show statistics periodically
+            if stats['attempts'] % stats_interval == 0:
+                elapsed = datetime.now() - stats['start_time']
+                current_count = get_fact_count(archive_file)
+                facts_collected = current_count - initial_count
+                
+                print()
+                print("-" * 70)
+                print("Statistics (after {} attempts):".format(stats['attempts']))
+                print(f"  Runtime: {elapsed}")
+                print(f"  Successful fetches: {stats['successful_fetches']}")
+                print(f"  Unique facts added: {stats['unique_added']}")
+                print(f"  Duplicates skipped: {stats['duplicates']}")
+                print(f"  Errors: {stats['errors']}")
+                print(f"  Current archive size: {current_count} facts")
+                print(f"  Facts collected this session: {facts_collected}")
+                print("-" * 70)
+                print()
+            
+            # Wait before next fetch
+            if not quiet:
+                print(f"Waiting {interval} seconds until next fetch...\n")
+            time.sleep(interval)
+            
+    except KeyboardInterrupt:
+        # Graceful shutdown
+        elapsed = datetime.now() - stats['start_time']
+        current_count = get_fact_count(archive_file)
+        facts_collected = current_count - initial_count
+        
+        print()
+        print("=" * 70)
+        print("Collection Stopped by User")
+        print("=" * 70)
+        print("Final Statistics:")
+        print(f"  Total runtime: {elapsed}")
+        print(f"  Total attempts: {stats['attempts']}")
+        print(f"  Successful fetches: {stats['successful_fetches']}")
+        print(f"  Unique facts added: {stats['unique_added']}")
+        print(f"  Duplicates skipped: {stats['duplicates']}")
+        print(f"  Errors: {stats['errors']}")
+        print(f"  Initial archive size: {initial_count} facts")
+        print(f"  Final archive size: {current_count} facts")
+        print(f"  Facts collected this session: {facts_collected}")
+        print("=" * 70)
+        
+        return 0
+    
+    # Final statistics if we reached max_facts
+    elapsed = datetime.now() - stats['start_time']
+    current_count = get_fact_count(archive_file)
+    facts_collected = current_count - initial_count
+    
+    if not quiet:
+        print()
+        print("=" * 70)
+        print("Collection Completed")
+        print("=" * 70)
+        print("Final Statistics:")
+        print(f"  Total runtime: {elapsed}")
+        print(f"  Total attempts: {stats['attempts']}")
+        print(f"  Successful fetches: {stats['successful_fetches']}")
+        print(f"  Unique facts added: {stats['unique_added']}")
+        print(f"  Duplicates skipped: {stats['duplicates']}")
+        print(f"  Errors: {stats['errors']}")
+        print(f"  Initial archive size: {initial_count} facts")
+        print(f"  Final archive size: {current_count} facts")
+        print(f"  Facts collected this session: {facts_collected}")
+        print("=" * 70)
+    
+    return 0
+
+
 def main():
     """Main function to fetch and display a fact."""
     # Set up argument parser
@@ -238,11 +396,49 @@ def main():
         default='facts_archive.json',
         help='Path to the archive file (default: facts_archive.json)'
     )
+    parser.add_argument(
+        '--auto',
+        action='store_true',
+        help='Run automated fact collection in a continuous loop'
+    )
+    parser.add_argument(
+        '--interval',
+        type=int,
+        default=60,
+        help='Seconds between fetches in automated mode (default: 60)'
+    )
+    parser.add_argument(
+        '--max-facts',
+        type=int,
+        default=None,
+        help='Maximum number of facts to collect in automated mode (default: unlimited)'
+    )
+    parser.add_argument(
+        '--quiet',
+        action='store_true',
+        help='Reduce output verbosity in automated mode'
+    )
+    parser.add_argument(
+        '--stats-interval',
+        type=int,
+        default=10,
+        help='Show statistics every N fetches in automated mode (default: 10)'
+    )
     
     args = parser.parse_args()
     
     archive_file = args.archive_file
     api_url = "https://uselessfacts.jsph.pl/api/v2/facts/random"
+    
+    # Handle automation mode
+    if args.auto:
+        return run_automated_collection(
+            archive_file=archive_file,
+            interval=args.interval,
+            max_facts=args.max_facts,
+            quiet=args.quiet,
+            stats_interval=args.stats_interval
+        )
     
     # Handle show-archive option
     if args.show_archive:
